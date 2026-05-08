@@ -1,0 +1,131 @@
+:root {
+  --bg: #0e0e10;
+  --card: #1a1a1f;
+  --border: #2a2a31;
+  --text: #ececef;
+  --muted: #9b9ba3;
+  --accent: #6ee7b7;
+  --accent-strong: #34d399;
+  --danger: #f87171;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.6rem;
+}
+
+h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  color: var(--accent);
+}
+
+.lede {
+  color: var(--muted);
+  margin: 0 0 1.5rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+}
+
+label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+
+input[type="password"],
+input[type="file"],
+textarea {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  background: #0b0b0d;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 120px;
+}
+
+button {
+  margin-top: 0.6rem;
+  padding: 0.55rem 1rem;
+  background: var(--accent-strong);
+  color: #0b0b0d;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0.6rem 0 0;
+}
+
+.status p {
+  margin: 0;
+}
+
+.status progress {
+  width: 100%;
+  margin-top: 0.5rem;
+}
+
+#summary {
+  white-space: pre-wrap;
+  background: #0b0b0d;
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  min-height: 60px;
+}
+
+footer {
+  margin-top: 2rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+footer a {
+  color: var(--muted);
+}

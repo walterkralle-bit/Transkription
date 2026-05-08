@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Transkriptions-App</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main>
+    <h1>Transkriptions-App</h1>
+    <p class="lede">Audio hochladen → Transkript → KI-Zusammenfassung.</p>
+
+    <section class="card" id="key-section">
+      <label for="api-key">OpenAI API-Key</label>
+      <input type="password" id="api-key" placeholder="sk-..." autocomplete="off" />
+      <button id="save-key" type="button">Speichern</button>
+      <p class="hint">Wird nur lokal im Browser (localStorage) gespeichert. Verlässt deinen Rechner nur als Authorization-Header an api.openai.com.</p>
+    </section>
+
+    <section class="card">
+      <label for="audio-file">Audio-Datei</label>
+      <input type="file" id="audio-file" accept="audio/*" />
+      <button id="run" type="button" disabled>Transkribieren &amp; Zusammenfassen</button>
+    </section>
+
+    <section class="card status" id="status-card" hidden>
+      <p id="status-text"></p>
+      <progress id="progress" hidden></progress>
+    </section>
+
+    <section class="card output" id="transcript-card" hidden>
+      <h2>Transkript</h2>
+      <textarea id="transcript" rows="8" readonly></textarea>
+      <button id="copy-transcript" type="button">Kopieren</button>
+    </section>
+
+    <section class="card output" id="summary-card" hidden>
+      <h2>Zusammenfassung</h2>
+      <div id="summary"></div>
+      <button id="copy-summary" type="button">Kopieren</button>
+    </section>
+
+    <footer>
+      <a href="https://github.com/walterkralle-bit/TranskriptionsApp" target="_blank" rel="noopener">GitHub</a>
+    </footer>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
