@@ -23,12 +23,22 @@ const copyTranscriptBtn = $("copy-transcript");
 const summaryCard = $("summary-card");
 const summaryDiv = $("summary");
 const copySummaryBtn = $("copy-summary");
+const followupText = $("followup-text");
+const followupRunBtn = $("followup-run");
+const followupRecordBtn = $("followup-record-btn");
+const followupRecordStatus = $("followup-record-status");
+const followupSourceHint = $("followup-source-hint");
 
 let mediaRecorder = null;
 let recordedChunks = [];
 let recordedBlob = null;
 let recordTimer = null;
 let recordStartedAt = 0;
+let followupMediaRecorder = null;
+let followupRecordedChunks = [];
+let followupRecordedBlob = null;
+let followupRecordTimer = null;
+let followupRecordStartedAt = 0;
 
 function setKeyCollapsed(collapsed) {
   keyCollapsed.hidden = !collapsed;
@@ -71,6 +81,15 @@ function updateRunState() {
     sourceHint.textContent = `Datei: ${fileInput.files[0].name}`;
   } else {
     sourceHint.hidden = true;
+  }
+
+  const hasFollowupAudio = followupRecordedBlob !== null;
+  followupRunBtn.disabled = !apiKeyInput.value.trim() || (!followupText.value.trim() && !hasFollowupAudio);
+  if (followupRecordedBlob) {
+    followupSourceHint.hidden = false;
+    followupSourceHint.textContent = `Rückfrage-Aufnahme bereit (${(followupRecordedBlob.size / 1024).toFixed(0)} KB)`;
+  } else {
+    followupSourceHint.hidden = true;
   }
 }
 
@@ -162,6 +181,74 @@ async function toggleRecording() {
   }
 }
 
+async function toggleFollowupRecording() {
+  if (followupMediaRecorder && followupMediaRecorder.state === "recording") {
+    followupMediaRecorder.stop();
+    return;
+  }
+
+  if (typeof MediaRecorder === "undefined") {
+    showStatus("Browser unterstützt MediaRecorder nicht. Bitte Rückfrage als Text schreiben.");
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showStatus("Browser unterstützt keinen Mikrofonzugriff für Rückfragen.");
+    return;
+  }
+
+  followupRecordStatus.textContent = "Mikrofon wird angefragt...";
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    showStatus(`Mikrofon-Zugriff verweigert: ${e.name || ""} ${e.message || e}`);
+    followupRecordStatus.textContent = "";
+    return;
+  }
+
+  try {
+    const mime = pickAudioMime();
+    try {
+      followupMediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch (ctorErr) {
+      followupMediaRecorder = new MediaRecorder(stream);
+    }
+    followupRecordedChunks = [];
+    followupRecordedBlob = null;
+
+    followupMediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) followupRecordedChunks.push(e.data);
+    };
+    followupMediaRecorder.onerror = (e) => {
+      showStatus(`Rückfrage-Aufnahme-Fehler: ${e.error?.name || ""} ${e.error?.message || e}`);
+    };
+    followupMediaRecorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const type = followupMediaRecorder.mimeType || "audio/mp4";
+      followupRecordedBlob = new Blob(followupRecordedChunks, { type });
+      followupRecordBtn.classList.remove("recording");
+      followupRecordBtn.textContent = "🎤 Rückfrage neu aufnehmen";
+      clearInterval(followupRecordTimer);
+      followupRecordStatus.textContent = `Aufnahme: ${fmtDuration(Date.now() - followupRecordStartedAt)}`;
+      updateRunState();
+    };
+
+    followupMediaRecorder.start(1000);
+    followupRecordStartedAt = Date.now();
+    followupRecordBtn.classList.add("recording");
+    followupRecordBtn.textContent = "⏹ Stoppen";
+    followupRecordStatus.textContent = "00:00";
+    followupRecordTimer = setInterval(() => {
+      followupRecordStatus.textContent = fmtDuration(Date.now() - followupRecordStartedAt);
+    }, 250);
+  } catch (e) {
+    stream.getTracks().forEach((t) => t.stop());
+    showStatus(`Rückfrage-Aufnahme konnte nicht starten: ${e.name || ""} ${e.message || e}`);
+    followupRecordStatus.textContent = "";
+  }
+}
+
 function showStatus(msg, busy = false) {
   statusCard.hidden = false;
   statusText.textContent = msg;
@@ -249,6 +336,33 @@ async function run() {
   }
 }
 
+async function runFollowup() {
+  const key = apiKeyInput.value.trim();
+  const text = followupText.value.trim();
+  const file = followupRecordedBlob;
+  if (!key || (!text && !file)) return;
+
+  followupRunBtn.disabled = true;
+
+  try {
+    let followup = text;
+    if (file) {
+      showStatus("Rückfrage transkribieren...", true);
+      followup = await transcribe(file, key);
+      followupText.value = followup;
+    }
+    showStatus("Rückfrage auswerten...", true);
+    const reply = await summarize(`RÜCKFRAGE / FEHLENDE PUNKTE:\n${followup}`, key);
+    summaryDiv.textContent = reply;
+    summaryCard.hidden = false;
+    statusCard.hidden = true;
+  } catch (e) {
+    showStatus(e.message || String(e));
+  } finally {
+    updateRunState();
+  }
+}
+
 function copyToClipboard(text, btn) {
   navigator.clipboard.writeText(text).then(() => {
     const orig = btn.textContent;
@@ -263,6 +377,9 @@ apiKeyInput.addEventListener("input", updateRunState);
 fileInput.addEventListener("change", () => { recordedBlob = null; updateRunState(); });
 recordBtn.addEventListener("click", toggleRecording);
 runBtn.addEventListener("click", run);
+followupText.addEventListener("input", updateRunState);
+followupRecordBtn.addEventListener("click", toggleFollowupRecording);
+followupRunBtn.addEventListener("click", runFollowup);
 copyTranscriptBtn.addEventListener("click", () => copyToClipboard(transcriptArea.value, copyTranscriptBtn));
 copySummaryBtn.addEventListener("click", () => copyToClipboard(summaryDiv.textContent, copySummaryBtn));
 

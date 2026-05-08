@@ -53,6 +53,18 @@
       <button id="copy-summary" type="button">Kopieren</button>
     </section>
 
+    <section class="card followup-card">
+      <h2>Rückfragen / vergessene Punkte</h2>
+      <p class="hint">Hier kannst du nachträgliche Fragen oder vergessene Inhalte als Text oder Sprachnachricht ergänzen.</p>
+      <textarea id="followup-text" rows="5" placeholder="Zum Beispiel: Bitte ergänze noch die genaue Heizlast / den Ort / den Preis..." ></textarea>
+      <div class="record-row">
+        <button id="followup-record-btn" type="button" class="record">🎤 Rückfrage aufnehmen</button>
+        <span id="followup-record-status" class="record-status"></span>
+      </div>
+      <p id="followup-source-hint" class="hint" hidden></p>
+      <button id="followup-run" type="button">Rückfrage transkribieren &amp; auswerten</button>
+    </section>
+
     <footer>
       <a href="https://github.com/walterkralle-bit/Transkription" target="_blank" rel="noopener">GitHub</a>
     </footer>
