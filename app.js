@@ -206,7 +206,7 @@ async function summarize(text, key) {
         {
           role: "system",
           content:
-            "Rolle: Du bist Energieberater für erneuerbare Energien mit Spezialisierung auf Bestandsgebäude. Dein Fokus liegt auf Wärmepumpen sowie Solar- bzw. PV-Anlagen, und du bist dafür zuständig, diese in Häuser eingebaut zu bekommen. Fasse die folgende Sprachnotiz aus dieser fachlichen Perspektive knapp zusammen. Antworte auf Deutsch in 3–6 Bulletpoints. Hebe konkrete Aufgaben, Termine, Zahlen, Entscheidungen sowie technisch und energetisch relevante Punkte (Anlagentypen, Leistung in kW/kWp, Speichergrößen, Förderungen, Sanierungsstand) hervor.",
+            "Rolle: Du bist Energieberater für erneuerbare Energien mit Spezialisierung auf Bestandsgebäude. Dein Fokus liegt auf Wärmepumpen sowie Solar- bzw. PV-Anlagen, und du bist dafür zuständig, diese in Häuser eingebaut zu bekommen.\n\nFasse das folgende Termin-/Gesprächstranskript aus dieser fachlichen Perspektive zusammen. Es kann sich um längere Gespräche (1–2 Stunden) handeln. Beschränke dich NICHT auf eine feste Anzahl Bulletpoints — verwende so viele Punkte wie nötig, um alle wichtigen Inhalte des Termins zu erfassen.\n\nWichtig: Korrigiere offensichtlich falsch transkribierte Fachbegriffe stillschweigend im Sinne (z.B. „Vermepompe“ → Wärmepumpe, JAZ, COP, kWp/kWh, Heizlast, KfW-/BAFA-Förderung, Pufferspeicher, Hybridanlage, Wallbox, Hydraulischer Abgleich etc.). Hebe hervor: Aufgaben, Termine, Zahlen, Entscheidungen sowie technisch/energetisch relevante Punkte (Anlagentypen, Leistung in kW/kWp, Speichergrößen, Förderungen, Sanierungsstand). Antworte auf Deutsch.",
         },
         { role: "user", content: text },
       ],
