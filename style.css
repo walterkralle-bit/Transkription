@@ -119,6 +119,34 @@ button:disabled {
   min-height: 60px;
 }
 
+.key-card #key-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.key-badge {
+  color: var(--accent);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+button.ghost {
+  margin-top: 0;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.8rem;
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--border);
+  color: var(--text);
+}
+
 .record-row {
   display: flex;
   align-items: center;

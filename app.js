@@ -6,6 +6,9 @@ const $ = (id) => document.getElementById(id);
 
 const apiKeyInput = $("api-key");
 const saveKeyBtn = $("save-key");
+const editKeyBtn = $("edit-key");
+const keyCollapsed = $("key-collapsed");
+const keyExpanded = $("key-expanded");
 const fileInput = $("audio-file");
 const runBtn = $("run");
 const recordBtn = $("record-btn");
@@ -27,9 +30,19 @@ let recordedBlob = null;
 let recordTimer = null;
 let recordStartedAt = 0;
 
+function setKeyCollapsed(collapsed) {
+  keyCollapsed.hidden = !collapsed;
+  keyExpanded.hidden = collapsed;
+}
+
 function loadKey() {
   const k = localStorage.getItem(KEY_STORAGE);
-  if (k) apiKeyInput.value = k;
+  if (k) {
+    apiKeyInput.value = k;
+    setKeyCollapsed(true);
+  } else {
+    setKeyCollapsed(false);
+  }
   updateRunState();
 }
 
@@ -38,7 +51,13 @@ function saveKey() {
   if (!k) return;
   localStorage.setItem(KEY_STORAGE, k);
   flashStatus("API-Key gespeichert.");
+  setKeyCollapsed(true);
   updateRunState();
+}
+
+function editKey() {
+  setKeyCollapsed(false);
+  apiKeyInput.focus();
 }
 
 function updateRunState() {
@@ -239,6 +258,7 @@ function copyToClipboard(text, btn) {
 }
 
 saveKeyBtn.addEventListener("click", saveKey);
+editKeyBtn.addEventListener("click", editKey);
 apiKeyInput.addEventListener("input", updateRunState);
 fileInput.addEventListener("change", () => { recordedBlob = null; updateRunState(); });
 recordBtn.addEventListener("click", toggleRecording);

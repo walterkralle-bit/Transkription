@@ -11,11 +11,17 @@
     <h1>Transkriptions-App</h1>
     <p class="lede">Direkt aufnehmen oder Datei hochladen → Transkript → KI-Zusammenfassung.</p>
 
-    <section class="card" id="key-section">
-      <label for="api-key">OpenAI API-Key</label>
-      <input type="password" id="api-key" placeholder="sk-..." autocomplete="off" />
-      <button id="save-key" type="button">Speichern</button>
-      <p class="hint">Wird nur lokal im Browser (localStorage) gespeichert. Verlässt deinen Rechner nur als Authorization-Header an api.openai.com.</p>
+    <section class="card key-card" id="key-section">
+      <div id="key-collapsed" hidden>
+        <span class="key-badge">✓ API-Key aktiviert</span>
+        <button id="edit-key" type="button" class="ghost">Ändern</button>
+      </div>
+      <div id="key-expanded">
+        <label for="api-key">OpenAI API-Key</label>
+        <input type="password" id="api-key" placeholder="sk-..." autocomplete="off" />
+        <button id="save-key" type="button">Speichern</button>
+        <p class="hint">Wird nur lokal im Browser (localStorage) gespeichert. Verlässt deinen Rechner nur als Authorization-Header an api.openai.com.</p>
+      </div>
     </section>
 
     <section class="card">
