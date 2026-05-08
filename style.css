@@ -119,6 +119,47 @@ button:disabled {
   min-height: 60px;
 }
 
+.record-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+button.record {
+  margin-top: 0;
+  background: #3b3b44;
+  color: var(--text);
+}
+
+button.record:hover:not(:disabled) {
+  background: #4a4a55;
+}
+
+button.record.recording {
+  background: var(--danger);
+  color: #1a1a1f;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.record-status {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.or-divider {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 1rem 0 0.5rem;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 footer {
   margin-top: 2rem;
   text-align: center;

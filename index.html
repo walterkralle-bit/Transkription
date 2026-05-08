@@ -9,7 +9,7 @@
 <body>
   <main>
     <h1>Transkriptions-App</h1>
-    <p class="lede">Audio hochladen → Transkript → KI-Zusammenfassung.</p>
+    <p class="lede">Direkt aufnehmen oder Datei hochladen → Transkript → KI-Zusammenfassung.</p>
 
     <section class="card" id="key-section">
       <label for="api-key">OpenAI API-Key</label>
@@ -19,8 +19,14 @@
     </section>
 
     <section class="card">
-      <label for="audio-file">Audio-Datei</label>
+      <label>Audio</label>
+      <div class="record-row">
+        <button id="record-btn" type="button" class="record">🎤 Aufnahme starten</button>
+        <span id="record-status" class="record-status"></span>
+      </div>
+      <p class="or-divider">– oder Datei hochladen –</p>
       <input type="file" id="audio-file" accept="audio/*" />
+      <p id="source-hint" class="hint" hidden></p>
       <button id="run" type="button" disabled>Transkribieren &amp; Zusammenfassen</button>
     </section>
 
