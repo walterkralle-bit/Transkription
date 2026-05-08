@@ -4,7 +4,7 @@ Web-App: Audio-Datei hochladen → automatische Transkription via OpenAI Whisper
 
 ## Live
 
-https://walterkralle-bit.github.io/TranskriptionsApp/
+https://walterkralle-bit.github.io/Transkription/
 
 ## Setup
 
