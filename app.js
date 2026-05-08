@@ -56,7 +56,11 @@ function updateRunState() {
 }
 
 function pickAudioMime() {
-  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+  // iOS Safari supports only audio/mp4; put it first so we don't pick an unsupported one
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const candidates = isIOS
+    ? ["audio/mp4", "audio/aac", "audio/webm"]
+    : ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
   for (const m of candidates) {
     if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
   }
@@ -74,15 +78,34 @@ async function toggleRecording() {
     return;
   }
 
-  if (!navigator.mediaDevices?.getUserMedia) {
-    showStatus("Browser unterstützt keine Mikrofon-Aufnahme.");
+  if (typeof MediaRecorder === "undefined") {
+    showStatus("Browser unterstützt MediaRecorder nicht. Bitte Datei hochladen.");
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showStatus("Browser unterstützt keinen Mikrofonzugriff. (HTTPS aktiv? iOS: Safari verwenden, nicht in-App-Browser)");
+    return;
+  }
+
+  recordStatus.textContent = "Mikrofon wird angefragt...";
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    showStatus(`Mikrofon-Zugriff verweigert: ${e.name || ""} ${e.message || e}`);
+    recordStatus.textContent = "";
     return;
   }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mime = pickAudioMime();
-    mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    try {
+      mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch (ctorErr) {
+      // iOS Safari sometimes rejects the mime; retry without it
+      mediaRecorder = new MediaRecorder(stream);
+    }
     recordedChunks = [];
     recordedBlob = null;
     fileInput.value = "";
@@ -90,9 +113,12 @@ async function toggleRecording() {
     mediaRecorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) recordedChunks.push(e.data);
     };
+    mediaRecorder.onerror = (e) => {
+      showStatus(`Aufnahme-Fehler: ${e.error?.name || ""} ${e.error?.message || e}`);
+    };
     mediaRecorder.onstop = () => {
       stream.getTracks().forEach((t) => t.stop());
-      const type = mediaRecorder.mimeType || "audio/webm";
+      const type = mediaRecorder.mimeType || "audio/mp4";
       recordedBlob = new Blob(recordedChunks, { type });
       recordBtn.classList.remove("recording");
       recordBtn.textContent = "🎤 Neu aufnehmen";
@@ -101,7 +127,8 @@ async function toggleRecording() {
       updateRunState();
     };
 
-    mediaRecorder.start();
+    // timeslice forces ondataavailable events; helps iOS Safari
+    mediaRecorder.start(1000);
     recordStartedAt = Date.now();
     recordBtn.classList.add("recording");
     recordBtn.textContent = "⏹ Stoppen";
@@ -110,7 +137,9 @@ async function toggleRecording() {
       recordStatus.textContent = fmtDuration(Date.now() - recordStartedAt);
     }, 250);
   } catch (e) {
-    showStatus(`Mikrofon-Zugriff verweigert oder Fehler: ${e.message || e}`);
+    stream.getTracks().forEach((t) => t.stop());
+    showStatus(`Aufnahme konnte nicht starten: ${e.name || ""} ${e.message || e}`);
+    recordStatus.textContent = "";
   }
 }
 
