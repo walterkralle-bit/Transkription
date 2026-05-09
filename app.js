@@ -23,6 +23,7 @@ const copyTranscriptBtn = $("copy-transcript");
 const summaryCard = $("summary-card");
 const summaryDiv = $("summary");
 const copySummaryBtn = $("copy-summary");
+const followupCard = $("followup-card");
 const followupText = $("followup-text");
 const followupRunBtn = $("followup-run");
 const followupRecordBtn = $("followup-record-btn");
@@ -327,6 +328,7 @@ async function run() {
     const summary = await summarize(transcript, key);
     summaryDiv.textContent = summary;
     summaryCard.hidden = false;
+    followupCard.hidden = false;
 
     statusCard.hidden = true;
   } catch (e) {
