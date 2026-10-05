@@ -1,3 +1,16 @@
+import {
+  MAX_API_ATTEMPTS,
+  RECORDING_SEGMENT_MS,
+  SUMMARY_TIMEOUT_MS,
+  TARGET_AUDIO_BITS_PER_SECOND,
+  TRANSCRIPTION_TIMEOUT_MS,
+  assertTranscriptionPart,
+  extensionForMime,
+  formatBytes,
+  isRetryableStatus,
+  retryDelayMs,
+} from "./audio-utils.mjs";
+
 const KEY_STORAGE = "openai_api_key";
 const TRANSCRIBE_MODEL = "whisper-1";
 const SUMMARY_MODEL = "gpt-4o-mini";
@@ -32,7 +45,11 @@ const followupSourceHint = $("followup-source-hint");
 
 let mediaRecorder = null;
 let recordedChunks = [];
-let recordedBlob = null;
+let recordedBlobs = [];
+let recordingStream = null;
+let recordingMime = "";
+let recordingSegmentTimer = null;
+let recordingStopRequested = false;
 let recordTimer = null;
 let recordStartedAt = 0;
 let followupMediaRecorder = null;
@@ -72,11 +89,12 @@ function editKey() {
 }
 
 function updateRunState() {
-  const hasAudio = fileInput.files.length > 0 || recordedBlob !== null;
+  const hasAudio = fileInput.files.length > 0 || recordedBlobs.length > 0;
   runBtn.disabled = !apiKeyInput.value.trim() || !hasAudio;
-  if (recordedBlob) {
+  if (recordedBlobs.length) {
+    const totalBytes = recordedBlobs.reduce((sum, part) => sum + part.size, 0);
     sourceHint.hidden = false;
-    sourceHint.textContent = `Aufnahme bereit (${(recordedBlob.size / 1024).toFixed(0)} KB)`;
+    sourceHint.textContent = `Aufnahme bereit (${fmtDuration(Date.now() - recordStartedAt)}, ${formatBytes(totalBytes)}, ${recordedBlobs.length} Abschnitt(e))`;
   } else if (fileInput.files.length) {
     sourceHint.hidden = false;
     sourceHint.textContent = `Datei: ${fileInput.files[0].name}`;
@@ -112,8 +130,10 @@ function fmtDuration(ms) {
 }
 
 async function toggleRecording() {
-  if (mediaRecorder && mediaRecorder.state === "recording") {
-    mediaRecorder.stop();
+  if (recordingStream && !recordingStopRequested) {
+    recordingStopRequested = true;
+    clearTimeout(recordingSegmentTimer);
+    if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
     return;
   }
 
@@ -138,36 +158,11 @@ async function toggleRecording() {
   }
 
   try {
-    const mime = pickAudioMime();
-    try {
-      mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-    } catch (ctorErr) {
-      // iOS Safari sometimes rejects the mime; retry without it
-      mediaRecorder = new MediaRecorder(stream);
-    }
-    recordedChunks = [];
-    recordedBlob = null;
+    recordingStream = stream;
+    recordingMime = pickAudioMime();
+    recordingStopRequested = false;
+    recordedBlobs = [];
     fileInput.value = "";
-
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) recordedChunks.push(e.data);
-    };
-    mediaRecorder.onerror = (e) => {
-      showStatus(`Aufnahme-Fehler: ${e.error?.name || ""} ${e.error?.message || e}`);
-    };
-    mediaRecorder.onstop = () => {
-      stream.getTracks().forEach((t) => t.stop());
-      const type = mediaRecorder.mimeType || "audio/mp4";
-      recordedBlob = new Blob(recordedChunks, { type });
-      recordBtn.classList.remove("recording");
-      recordBtn.textContent = "🎤 Neu aufnehmen";
-      clearInterval(recordTimer);
-      recordStatus.textContent = `Aufnahme: ${fmtDuration(Date.now() - recordStartedAt)}`;
-      updateRunState();
-    };
-
-    // timeslice forces ondataavailable events; helps iOS Safari
-    mediaRecorder.start(1000);
     recordStartedAt = Date.now();
     recordBtn.classList.add("recording");
     recordBtn.textContent = "⏹ Stoppen";
@@ -175,11 +170,69 @@ async function toggleRecording() {
     recordTimer = setInterval(() => {
       recordStatus.textContent = fmtDuration(Date.now() - recordStartedAt);
     }, 250);
+    startRecordingSegment();
   } catch (e) {
-    stream.getTracks().forEach((t) => t.stop());
+    stream.getTracks().forEach((track) => track.stop());
+    recordingStream = null;
     showStatus(`Aufnahme konnte nicht starten: ${e.name || ""} ${e.message || e}`);
     recordStatus.textContent = "";
   }
+}
+
+function createMainMediaRecorder() {
+  const candidates = [
+    { ...(recordingMime ? { mimeType: recordingMime } : {}), audioBitsPerSecond: TARGET_AUDIO_BITS_PER_SECOND },
+    recordingMime ? { mimeType: recordingMime } : {},
+    { audioBitsPerSecond: TARGET_AUDIO_BITS_PER_SECOND },
+    {},
+  ];
+  for (const options of candidates) {
+    try {
+      return new MediaRecorder(recordingStream, options);
+    } catch (e) {
+      // Safari differs by release in which MIME/bitrate combinations it accepts.
+    }
+  }
+  throw new Error("Kein unterstütztes Aufnahmeformat gefunden.");
+}
+
+function startRecordingSegment() {
+  mediaRecorder = createMainMediaRecorder();
+  recordedChunks = [];
+
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+  };
+  mediaRecorder.onerror = (e) => {
+    recordingStopRequested = true;
+    showStatus(`Aufnahme-Fehler: ${e.error?.name || ""} ${e.error?.message || e}`);
+  };
+  mediaRecorder.onstop = () => {
+    clearTimeout(recordingSegmentTimer);
+    const type = mediaRecorder.mimeType || recordingMime || "audio/mp4";
+    const blob = new Blob(recordedChunks, { type });
+    if (blob.size > 0) recordedBlobs.push(blob);
+
+    if (!recordingStopRequested) {
+      startRecordingSegment();
+      return;
+    }
+
+    recordingStream.getTracks().forEach((track) => track.stop());
+    recordingStream = null;
+    recordBtn.classList.remove("recording");
+    recordBtn.textContent = "🎤 Neu aufnehmen";
+    clearInterval(recordTimer);
+    recordStatus.textContent = `Aufnahme: ${fmtDuration(Date.now() - recordStartedAt)}`;
+    updateRunState();
+  };
+
+  // Each stop creates a self-contained media file. Byte-slicing WebM/MP4 would
+  // create invalid fragments, so long recordings are split at recording time.
+  mediaRecorder.start(1000);
+  recordingSegmentTimer = setTimeout(() => {
+    if (mediaRecorder.state === "recording") mediaRecorder.stop();
+  }, RECORDING_SEGMENT_MS);
 }
 
 async function toggleFollowupRecording() {
@@ -261,66 +314,108 @@ function flashStatus(msg) {
   setTimeout(() => { statusCard.hidden = true; }, 2000);
 }
 
-async function transcribe(file, key) {
-  const fd = new FormData();
-  // file may be a File or a Blob from MediaRecorder; give it a filename either way
-  const name = file.name || `recording.${(file.type.split("/")[1] || "webm").split(";")[0]}`;
-  fd.append("file", file, name);
-  fd.append("model", TRANSCRIBE_MODEL);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}` },
-    body: fd,
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Whisper-Fehler ${res.status}: ${err}`);
+async function transcribe(file, key, fallbackName) {
+  assertTranscriptionPart(file);
+  const name = file.name || fallbackName || `recording.${extensionForMime(file.type)}`;
+
+  for (let attempt = 1; attempt <= MAX_API_ATTEMPTS; attempt += 1) {
+    const fd = new FormData();
+    fd.append("file", file, name);
+    fd.append("model", TRANSCRIBE_MODEL);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TRANSCRIPTION_TIMEOUT_MS);
+    try {
+      const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}` },
+        body: fd,
+        signal: controller.signal,
+      });
+      if (res.ok) return (await res.json()).text;
+
+      const err = await res.text();
+      if (!isRetryableStatus(res.status) || attempt === MAX_API_ATTEMPTS) {
+        throw new Error(`Whisper-Fehler ${res.status}: ${err}`);
+      }
+      await sleep(retryDelayMs(attempt, res.headers.get("Retry-After")));
+    } catch (e) {
+      if (e.message?.startsWith("Whisper-Fehler")) throw e;
+      if (attempt === MAX_API_ATTEMPTS) {
+        if (e.name === "AbortError") throw new Error("Zeitüberschreitung bei der Transkription.");
+        throw e;
+      }
+      await sleep(retryDelayMs(attempt));
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  const data = await res.json();
-  return data.text;
 }
 
 async function summarize(text, key) {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: SUMMARY_MODEL,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Rolle: Du bist Energieberater für erneuerbare Energien mit Spezialisierung auf Bestandsgebäude. Dein Fokus liegt auf Wärmepumpen sowie Solar- bzw. PV-Anlagen, und du bist dafür zuständig, diese in Häuser eingebaut zu bekommen.\n\nFasse das folgende Termin-/Gesprächstranskript aus dieser fachlichen Perspektive zusammen. Es kann sich um längere Gespräche (1–2 Stunden) handeln. Beschränke dich NICHT auf eine feste Anzahl Bulletpoints — verwende so viele Punkte wie nötig, um alle wichtigen Inhalte des Termins zu erfassen.\n\nWichtig: Korrigiere offensichtlich falsch transkribierte Fachbegriffe stillschweigend im Sinne (z.B. „Vermepompe“ → Wärmepumpe, JAZ, COP, kWp/kWh, Heizlast, KfW-/BAFA-Förderung, Pufferspeicher, Hybridanlage, Wallbox, Hydraulischer Abgleich etc.). Hebe hervor: Aufgaben, Termine, Zahlen, Entscheidungen sowie technisch/energetisch relevante Punkte (Anlagentypen, Leistung in kW/kWp, Speichergrößen, Förderungen, Sanierungsstand). Antworte auf Deutsch.",
-        },
-        { role: "user", content: text },
-      ],
-      temperature: 0.3,
-    }),
+  const body = JSON.stringify({
+    model: SUMMARY_MODEL,
+    messages: [
+      {
+        role: "system",
+        content:
+          "Rolle: Du bist Energieberater für erneuerbare Energien mit Spezialisierung auf Bestandsgebäude. Dein Fokus liegt auf Wärmepumpen sowie Solar- bzw. PV-Anlagen, und du bist dafür zuständig, diese in Häuser eingebaut zu bekommen.\n\nFasse das folgende Termin-/Gesprächstranskript aus dieser fachlichen Perspektive zusammen. Es kann sich um längere Gespräche (1–2 Stunden) handeln. Beschränke dich NICHT auf eine feste Anzahl Bulletpoints — verwende so viele Punkte wie nötig, um alle wichtigen Inhalte des Termins zu erfassen.\n\nWichtig: Korrigiere offensichtlich falsch transkribierte Fachbegriffe stillschweigend im Sinne (z.B. „Vermepompe“ → Wärmepumpe, JAZ, COP, kWp/kWh, Heizlast, KfW-/BAFA-Förderung, Pufferspeicher, Hybridanlage, Wallbox, Hydraulischer Abgleich etc.). Hebe hervor: Aufgaben, Termine, Zahlen, Entscheidungen sowie technisch/energetisch relevante Punkte (Anlagentypen, Leistung in kW/kWp, Speichergrößen, Förderungen, Sanierungsstand). Antworte auf Deutsch.",
+      },
+      { role: "user", content: text },
+    ],
+    temperature: 0.3,
   });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Summary-Fehler ${res.status}: ${err}`);
+
+  for (let attempt = 1; attempt <= MAX_API_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SUMMARY_TIMEOUT_MS);
+    try {
+      const res = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body,
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.choices?.[0]?.message?.content || "(keine Antwort)";
+      }
+      const err = await res.text();
+      if (!isRetryableStatus(res.status) || attempt === MAX_API_ATTEMPTS) {
+        throw new Error(`Summary-Fehler ${res.status}: ${err}`);
+      }
+      await sleep(retryDelayMs(attempt, res.headers.get("Retry-After")));
+    } catch (e) {
+      if (e.message?.startsWith("Summary-Fehler")) throw e;
+      if (attempt === MAX_API_ATTEMPTS) {
+        if (e.name === "AbortError") throw new Error("Zeitüberschreitung bei der Zusammenfassung.");
+        throw e;
+      }
+      await sleep(retryDelayMs(attempt));
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "(keine Antwort)";
 }
 
 async function run() {
   const key = apiKeyInput.value.trim();
-  const file = recordedBlob || fileInput.files[0];
-  if (!key || !file) return;
+  const parts = recordedBlobs.length ? recordedBlobs : [fileInput.files[0]];
+  if (!key || !parts[0]) return;
 
   runBtn.disabled = true;
   transcriptCard.hidden = true;
   summaryCard.hidden = true;
 
   try {
-    showStatus("Transkribiere...", true);
-    const transcript = await transcribe(file, key);
+    const transcripts = [];
+    for (let index = 0; index < parts.length; index += 1) {
+      showStatus(`Transkribiere Abschnitt ${index + 1} von ${parts.length}...`, true);
+      const extension = extensionForMime(parts[index].type);
+      transcripts.push(await transcribe(parts[index], key, `recording-${index + 1}.${extension}`));
+    }
+    const transcript = transcripts.join("\n\n");
     transcriptArea.value = transcript;
     transcriptCard.hidden = false;
 
@@ -376,7 +471,7 @@ function copyToClipboard(text, btn) {
 saveKeyBtn.addEventListener("click", saveKey);
 editKeyBtn.addEventListener("click", editKey);
 apiKeyInput.addEventListener("input", updateRunState);
-fileInput.addEventListener("change", () => { recordedBlob = null; updateRunState(); });
+fileInput.addEventListener("change", () => { recordedBlobs = []; updateRunState(); });
 recordBtn.addEventListener("click", toggleRecording);
 runBtn.addEventListener("click", run);
 followupText.addEventListener("input", updateRunState);

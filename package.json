@@ -1,0 +1,9 @@
+{
+  "name": "transkriptions-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check app.js && node --check audio-utils.mjs"
+  }
+}
