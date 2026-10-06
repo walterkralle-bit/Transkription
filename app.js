@@ -1,19 +1,30 @@
 import {
   MAX_API_ATTEMPTS,
   RECORDING_SEGMENT_MS,
+  SAFE_AUDIO_PART_BYTES,
   SUMMARY_TIMEOUT_MS,
   TARGET_AUDIO_BITS_PER_SECOND,
   TRANSCRIPTION_TIMEOUT_MS,
+  UPLOAD_AUDIO_BITS_PER_SECOND,
+  UPLOAD_SEGMENT_SECONDS,
   assertTranscriptionPart,
+  estimatedTranscodedPartBytes,
   extensionForMime,
   formatBytes,
   isRetryableStatus,
   retryDelayMs,
+  uploadHandlingForBytes,
 } from "./audio-utils.mjs";
 
 const KEY_STORAGE = "openai_api_key";
 const TRANSCRIBE_MODEL = "whisper-1";
 const SUMMARY_MODEL = "gpt-4o-mini";
+const FFMPEG_VERSION = "0.12.15";
+const FFMPEG_CORE_VERSION = "0.12.10";
+const CDN_BASE = "https://cdn.jsdelivr.net/npm";
+const FFMPEG_SCRIPT_URL = `${CDN_BASE}/@ffmpeg/ffmpeg@${FFMPEG_VERSION}/dist/umd/ffmpeg.js`;
+const FFMPEG_WORKER_URL = `${CDN_BASE}/@ffmpeg/ffmpeg@${FFMPEG_VERSION}/dist/umd/814.ffmpeg.js`;
+const FFMPEG_CORE_BASE = `${CDN_BASE}/@ffmpeg/core@${FFMPEG_CORE_VERSION}/dist/esm`;
 
 const $ = (id) => document.getElementById(id);
 
@@ -96,8 +107,10 @@ function updateRunState() {
     sourceHint.hidden = false;
     sourceHint.textContent = `Aufnahme bereit (${fmtDuration(Date.now() - recordStartedAt)}, ${formatBytes(totalBytes)}, ${recordedBlobs.length} Abschnitt(e))`;
   } else if (fileInput.files.length) {
+    const file = fileInput.files[0];
     sourceHint.hidden = false;
-    sourceHint.textContent = `Datei: ${fileInput.files[0].name}`;
+    sourceHint.textContent = `Datei: ${file.name} (${formatBytes(file.size)})` +
+      (file.size > SAFE_AUDIO_PART_BYTES ? " – wird vor der Transkription lokal aufgeteilt" : "");
   } else {
     sourceHint.hidden = true;
   }
@@ -316,6 +329,109 @@ function flashStatus(msg) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function loadScript(url) {
+  return new Promise((resolve, reject) => {
+    if (window.FFmpegWASM?.FFmpeg) {
+      resolve();
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = url;
+    script.crossOrigin = "anonymous";
+    script.onload = resolve;
+    script.onerror = () => reject(new Error("Audio-Werkzeug konnte nicht geladen werden."));
+    document.head.appendChild(script);
+  });
+}
+
+async function remoteAssetAsObjectUrl(url, type) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Audio-Werkzeug konnte nicht geladen werden (HTTP ${response.status}).`);
+  return URL.createObjectURL(new Blob([await response.arrayBuffer()], { type }));
+}
+
+function inputExtension(file) {
+  const match = file.name?.match(/\.([a-z0-9]{1,8})$/i);
+  return match ? match[1].toLowerCase() : extensionForMime(file.type);
+}
+
+async function splitUploadedAudio(file) {
+  if (typeof WebAssembly === "undefined" || typeof Worker === "undefined") {
+    throw new Error("Dieser Browser kann große Audiodateien nicht lokal verarbeiten. Bitte einen aktuellen Browser verwenden.");
+  }
+  if (estimatedTranscodedPartBytes() >= SAFE_AUDIO_PART_BYTES) {
+    throw new Error("Interner Fehler: Die geplanten Audio-Abschnitte sind zu groß.");
+  }
+
+  showStatus("Lade einmalig das Audio-Werkzeug (ca. 32 MB)...", true);
+  await loadScript(FFMPEG_SCRIPT_URL);
+
+  const objectUrls = [];
+  let ffmpeg;
+  try {
+    // The wrapper worker is loaded from a same-origin blob. As a module worker it
+    // then imports the ESM core; jsDelivr provides CORS headers for both assets.
+    const classWorkerURL = await remoteAssetAsObjectUrl(FFMPEG_WORKER_URL, "text/javascript");
+    const coreURL = `${FFMPEG_CORE_BASE}/ffmpeg-core.js`;
+    const wasmURL = `${FFMPEG_CORE_BASE}/ffmpeg-core.wasm`;
+    objectUrls.push(classWorkerURL);
+
+    const { FFmpeg } = window.FFmpegWASM;
+    ffmpeg = new FFmpeg();
+    ffmpeg.on("progress", ({ progress: fraction }) => {
+      if (Number.isFinite(fraction) && fraction >= 0 && fraction <= 1) {
+        showStatus(`Bereite Audio lokal vor... ${Math.round(fraction * 100)} %`, true);
+      }
+    });
+    await ffmpeg.load({ classWorkerURL, coreURL, wasmURL });
+
+    showStatus("Bereite Audio lokal vor...", true);
+    const inputName = `input.${inputExtension(file)}`;
+    await ffmpeg.writeFile(inputName, new Uint8Array(await file.arrayBuffer()));
+    const exitCode = await ffmpeg.exec([
+      "-i", inputName,
+      "-vn",
+      "-map_metadata", "-1",
+      "-ac", "1",
+      "-ar", "16000",
+      "-c:a", "libmp3lame",
+      "-b:a", `${UPLOAD_AUDIO_BITS_PER_SECOND / 1000}k`,
+      "-f", "segment",
+      "-segment_time", String(UPLOAD_SEGMENT_SECONDS),
+      "-reset_timestamps", "1",
+      "part-%03d.mp3",
+    ]);
+    if (exitCode !== 0) throw new Error(`Audio-Konvertierung fehlgeschlagen (Code ${exitCode}).`);
+
+    const entries = await ffmpeg.listDir("/");
+    const names = entries
+      .filter(({ isDir, name }) => !isDir && /^part-\d{3}\.mp3$/.test(name))
+      .map(({ name }) => name)
+      .sort();
+    if (!names.length) throw new Error("Audio-Konvertierung hat keine Abschnitte erzeugt.");
+
+    const parts = [];
+    for (let index = 0; index < names.length; index += 1) {
+      const data = await ffmpeg.readFile(names[index]);
+      const part = new File([data], `upload-teil-${index + 1}.mp3`, { type: "audio/mpeg" });
+      assertTranscriptionPart(part);
+      parts.push(part);
+    }
+    return parts;
+  } catch (error) {
+    if (typeof error === "string") throw new Error(error);
+    throw error;
+  } finally {
+    ffmpeg?.terminate();
+    objectUrls.forEach((url) => URL.revokeObjectURL(url));
+  }
+}
+
+async function prepareUploadedAudio(file) {
+  const handling = uploadHandlingForBytes(file.size);
+  return handling === "direct" ? [file] : splitUploadedAudio(file);
+}
+
 async function transcribe(file, key, fallbackName) {
   assertTranscriptionPart(file);
   const name = file.name || fallbackName || `recording.${extensionForMime(file.type)}`;
@@ -401,14 +517,15 @@ async function summarize(text, key) {
 
 async function run() {
   const key = apiKeyInput.value.trim();
-  const parts = recordedBlobs.length ? recordedBlobs : [fileInput.files[0]];
-  if (!key || !parts[0]) return;
+  const uploadedFile = fileInput.files[0];
+  if (!key || (!recordedBlobs.length && !uploadedFile)) return;
 
   runBtn.disabled = true;
   transcriptCard.hidden = true;
   summaryCard.hidden = true;
 
   try {
+    const parts = recordedBlobs.length ? recordedBlobs : await prepareUploadedAudio(uploadedFile);
     const transcripts = [];
     for (let index = 0; index < parts.length; index += 1) {
       showStatus(`Transkribiere Abschnitt ${index + 1} von ${parts.length}...`, true);

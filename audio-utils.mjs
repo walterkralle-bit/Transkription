@@ -1,8 +1,11 @@
 export const OPENAI_AUDIO_LIMIT_BYTES = 25_000_000;
 // Leave room below OpenAI's decimal 25 MB per-file limit.
 export const SAFE_AUDIO_PART_BYTES = 24_000_000;
+export const MAX_UPLOAD_BYTES = 250_000_000;
 export const RECORDING_SEGMENT_MS = 10 * 60 * 1000;
 export const TARGET_AUDIO_BITS_PER_SECOND = 32_000;
+export const UPLOAD_SEGMENT_SECONDS = 20 * 60;
+export const UPLOAD_AUDIO_BITS_PER_SECOND = 48_000;
 export const TRANSCRIPTION_TIMEOUT_MS = 5 * 60 * 1000;
 export const SUMMARY_TIMEOUT_MS = 3 * 60 * 1000;
 export const MAX_API_ATTEMPTS = 3;
@@ -19,11 +22,31 @@ export function assertTranscriptionPart(part) {
   if (part.size > SAFE_AUDIO_PART_BYTES) {
     throw new Error(
       `Die Audio-Datei ist ${formatBytes(part.size)} groß. OpenAI akzeptiert pro ` +
-      `Transkriptions-Anfrage maximal 25 MB. Bitte die Datei komprimieren/teilen ` +
-      `oder direkt in dieser App aufnehmen; App-Aufnahmen werden automatisch in ` +
-      `sichere 10-Minuten-Abschnitte geteilt.`
+      `Transkriptions-Anfrage maximal 25 MB. Die automatische Aufteilung hat ` +
+      `keinen ausreichend kleinen Abschnitt erzeugt.`
     );
   }
+}
+
+export function uploadHandlingForBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    throw new Error("Die Audio-Datei ist leer oder ungültig.");
+  }
+  if (bytes > MAX_UPLOAD_BYTES) {
+    throw new Error(
+      `Die Audio-Datei ist ${formatBytes(bytes)} groß. Unterstützt werden Uploads bis ` +
+      `${formatBytes(MAX_UPLOAD_BYTES)}.`,
+    );
+  }
+  return bytes <= SAFE_AUDIO_PART_BYTES ? "direct" : "transcode";
+}
+
+export function estimatedTranscodedPartBytes(
+  seconds = UPLOAD_SEGMENT_SECONDS,
+  bitsPerSecond = UPLOAD_AUDIO_BITS_PER_SECOND,
+) {
+  // Fixed-bitrate MP3 plus generous allowance for headers/container overhead.
+  return Math.ceil((seconds * bitsPerSecond) / 8) + 128_000;
 }
 
 export function extensionForMime(type = "") {
