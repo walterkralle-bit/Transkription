@@ -2,17 +2,24 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  OPENAI_AUDIO_LIMIT_BYTES,
+  MAX_API_ATTEMPTS,
   MAX_UPLOAD_BYTES,
+  OPENAI_AUDIO_LIMIT_BYTES,
   RECORDING_SEGMENT_MS,
+  SUMMARY_TIMEOUT_MS,
   SAFE_AUDIO_PART_BYTES,
-  UPLOAD_AUDIO_BITS_PER_SECOND,
-  UPLOAD_SEGMENT_SECONDS,
+  TRANSCODE_SEGMENT_SECONDS,
+  TRANSCRIPTION_TIMEOUT_MS,
   assertTranscriptionPart,
-  estimatedTranscodedPartBytes,
+  buildTranscodeArguments,
   extensionForMime,
+  extensionForUpload,
   formatBytes,
+  isPreparedUploadRequired,
   isRetryableStatus,
+  pcmWavBytes,
+  preparationStatus,
+  sortAudioPartNames,
   retryDelayMs,
   uploadHandlingForBytes,
 } from "./audio-utils.mjs";
@@ -28,22 +35,6 @@ test("keeps transcription requests below OpenAI's 25 MB limit", () => {
   );
 });
 
-test("routes uploaded files over 24 MB through local conversion", () => {
-  assert.equal(uploadHandlingForBytes(SAFE_AUDIO_PART_BYTES), "direct");
-  assert.equal(uploadHandlingForBytes(SAFE_AUDIO_PART_BYTES + 1), "transcode");
-  assert.equal(uploadHandlingForBytes(90_000_000), "transcode");
-  assert.equal(uploadHandlingForBytes(MAX_UPLOAD_BYTES), "transcode");
-  assert.throws(() => uploadHandlingForBytes(0), /leer oder ungültig/);
-  assert.throws(() => uploadHandlingForBytes(MAX_UPLOAD_BYTES + 1), /bis 250.0 MB/);
-});
-
-test("20-minute fixed-bitrate upload parts remain well below the request limit", () => {
-  assert.equal(UPLOAD_SEGMENT_SECONDS, 20 * 60);
-  assert.equal(UPLOAD_AUDIO_BITS_PER_SECOND, 48_000);
-  assert.equal(estimatedTranscodedPartBytes(), 7_328_000);
-  assert.ok(estimatedTranscodedPartBytes() < SAFE_AUDIO_PART_BYTES);
-});
-
 test("segments a 90 minute recording into nine requests", () => {
   assert.equal(RECORDING_SEGMENT_MS, 10 * 60 * 1000);
   assert.equal(Math.ceil((90 * 60 * 1000) / RECORDING_SEGMENT_MS), 9);
@@ -53,9 +44,58 @@ test("uses supported filename extensions for browser recording MIME types", () =
   assert.equal(extensionForMime("audio/webm;codecs=opus"), "webm");
   assert.equal(extensionForMime("audio/mp4"), "m4a");
   assert.equal(extensionForMime("audio/aac"), "m4a");
+  assert.equal(extensionForMime("video/mp4"), "m4a");
+  assert.equal(extensionForMime("audio/flac"), "flac");
+  assert.equal(extensionForMime("audio/x-wav"), "wav");
 });
 
-test("retries only temporary HTTP failures with bounded backoff", () => {
+test("recognizes oversized existing uploads without byte slicing", () => {
+  assert.equal(uploadHandlingForBytes(SAFE_AUDIO_PART_BYTES), "direct");
+  assert.equal(uploadHandlingForBytes(90_000_000), "transcode");
+  assert.throws(() => uploadHandlingForBytes(0), /leer oder ungültig/);
+  assert.throws(() => uploadHandlingForBytes(MAX_UPLOAD_BYTES + 1), /bis 250.0 MB/);
+  assert.equal(isPreparedUploadRequired({ size: SAFE_AUDIO_PART_BYTES }), false);
+  assert.equal(isPreparedUploadRequired({ size: 90_000_000 }), true);
+  assert.equal(extensionForUpload({ name: "Termin.M4A", type: "" }), "m4a");
+  assert.equal(extensionForUpload({ name: "aufnahme", type: "audio/flac" }), "flac");
+});
+
+test("re-encodes ten-minute parts as valid mono 16 kHz WAV below the API limit", () => {
+  assert.equal(TRANSCODE_SEGMENT_SECONDS, 600);
+  assert.equal(pcmWavBytes(TRANSCODE_SEGMENT_SECONDS), 19_200_078);
+  assert.ok(pcmWavBytes(TRANSCODE_SEGMENT_SECONDS) < SAFE_AUDIO_PART_BYTES);
+
+  const args = buildTranscodeArguments("input.m4a");
+  assert.deepEqual(args.slice(0, 2), ["-i", "input.m4a"]);
+  assert.deepEqual(args.slice(args.indexOf("-ac"), args.indexOf("-ac") + 4), ["-ac", "1", "-ar", "16000"]);
+  assert.ok(args.includes("pcm_s16le"));
+  assert.ok(args.includes("segment"));
+  assert.equal(args.at(-1), "part-%03d.wav");
+  assert.equal(args.includes("-c copy"), false);
+});
+
+test("selects only complete generated audio containers in sequence", () => {
+  assert.deepEqual(
+    sortAudioPartNames(["input.m4a", "part-010.wav", "part-002.wav", "part-001.wav", "part-x.wav"]),
+    ["part-001.wav", "part-002.wav", "part-010.wav"],
+  );
+});
+
+test("maps preparation phases to bounded UI progress", () => {
+  assert.deepEqual(preparationStatus("download", 0.5), {
+    label: "Lade den Audio-Konverter (einmalig ca. 32 MB)...",
+    progress: 0.05,
+  });
+  assert.equal(preparationStatus("copy", 1).progress, 0.2);
+  assert.ok(Math.abs(preparationStatus("transcode", 0.5).progress - 0.6) < Number.EPSILON);
+  assert.equal(preparationStatus("transcode", 2).progress, 1);
+  assert.equal(preparationStatus("unknown", Number.NaN).progress, 0);
+});
+
+test("retries only temporary HTTP failures with bounded backoff and timeouts", () => {
+  assert.equal(MAX_API_ATTEMPTS, 3);
+  assert.equal(TRANSCRIPTION_TIMEOUT_MS, 5 * 60 * 1000);
+  assert.equal(SUMMARY_TIMEOUT_MS, 3 * 60 * 1000);
   assert.equal(isRetryableStatus(429), true);
   assert.equal(isRetryableStatus(503), true);
   assert.equal(isRetryableStatus(400), false);
