@@ -19,33 +19,38 @@ verwendet deshalb ein konservatives Limit von 24 MB je Request.
 
 - Direkt in der App erstellte Aufnahmen werden alle 10 Minuten als eigenständige
   Audiodatei abgeschlossen.
-- Bereits vorhandene Dateien über 24 MB werden **vor dem Upload im Browser** mit
-  FFmpeg WebAssembly dekodiert und als Mono-PCM (16 kHz, 16 Bit) in eigenständige
-  10-Minuten-WAV-Dateien re-enkodiert. Ein voller Abschnitt ist ca. 19,2 MB groß.
-  Es findet ausdrücklich kein Byte-Slicing von MP4-, WebM- oder anderen Containern
-  statt.
-- Die erzeugten Abschnitte werden einzeln aus dem WebAssembly-Dateisystem gelesen,
-  sequenziell an OpenAI übertragen und danach sofort aus dem Arbeitsspeicher
-  entfernt. Die Transkripte werden in zeitlicher Reihenfolge zusammengefügt.
-- Während Laden, Konvertieren und Transkribieren zeigt die Oberfläche Phase und
-  Fortschritt. Temporäre Netzwerkfehler, Rate Limits und 5xx-Antworten werden bis
-  zu zweimal wiederholt; pro Transkriptionsabschnitt gilt ein Timeout von fünf
-  Minuten, für die lokale Konvertierung 30 Minuten.
+- Importierte Audiodateien werden bis einschließlich **5 Stunden** unterstützt.
+  Die frühere Begrenzung auf 250 MB entfällt, auch mehrgigabytegroße WAV-Dateien
+  können ausgewählt werden. Die Laufzeit wird vor der Transkription geprüft.
+- Die Originaldatei wird über FFmpegs WORKERFS direkt dateibasiert gelesen und
+  nicht vollständig in den WebAssembly-Arbeitsspeicher kopiert. Es wird jeweils
+  nur ein eigenständiger Zehn-Minuten-Abschnitt als Mono-PCM-WAV (16 kHz, 16 Bit)
+  erzeugt. Ein voller Abschnitt ist ca. 19,2 MB groß, unter dem API-Limit.
+- Nach jedem Abschnitt wird die temporäre WAV-Datei freigegeben. Die Transkripte
+  werden in zeitlicher Reihenfolge zusammengefügt; fünf Stunden ergeben 30
+  Requests. Es findet kein Byte-Slicing komprimierter Container statt.
+- Bereits fertig transkribierte Abschnitte bleiben bei einem späteren Fehler in
+  der Oberfläche sichtbar und kopierbar.
+- Dateien ohne Laufzeitmetadaten, beispielsweise manche WebM-Aufnahmen, werden
+  zunächst ohne Ausgabe einer kompletten WAV-Datei geprüft. Sehr lange Importe
+  können entsprechend Zeit benötigen; die Seite muss geöffnet bleiben.
+- Temporäre API-Netzwerkfehler, Rate Limits und 5xx-Antworten werden bis zu
+  zweimal wiederholt. Pro API-Abschnitt gilt ein Timeout von fünf Minuten;
+  lokale Dauerprüfung bzw. einzelne Konvertierung haben maximal 30 Minuten.
 
-### Formate, Ressourcen und Fallback
+### Formate und Browser-Verarbeitung
 
-FFmpeg dekodiert die üblichen Browser-Aufnahmeformate MP3, M4A/MP4 (AAC), WAV,
-WebM/Opus, Ogg/Opus und FLAC. Welche seltenen Codecs tatsächlich verfügbar sind,
-hängt vom FFmpeg-Core ab. Kann eine Datei nicht dekodiert werden, nennt die App die
-unterstützten Formate und empfiehlt einen Export als MP3 oder M4A.
+Unterstützte Importformate: MP3, M4A/MP4 (AAC), WAV, WebM/Opus, Ogg/Opus und
+FLAC, abhängig von den im FFmpeg-Core verfügbaren Codecs. Nicht dekodierbare
+Dateien erhalten eine Fehlermeldung mit Format-Hinweis. Dateien über fünf Stunden
+werden mit einem konkreten Hinweis zur Laufzeit abgelehnt.
 
-Der Single-Thread-FFmpeg-Core (Version 0.12.10, ca. 32 MB) wird nur für große
-Uploads von jsDelivr geladen und per SHA-256 geprüft. Der kleine JS-Wrapper
-`@ffmpeg/ffmpeg` 0.12.15 liegt versioniert unter `vendor/ffmpeg/`. Die Verarbeitung
-läuft in einem Web Worker. Input und erzeugte Dateien belegen vorübergehend
-Browser-Arbeitsspeicher; deshalb gilt eine Obergrenze von 250 MB. Bei 90-MB-Dateien
-sollten andere speicherintensive Tabs geschlossen bleiben. Das ist speichersparender
-als das vollständige Dekodieren einer 60–90-minütigen Datei in ein Web-Audio-`AudioBuffer`.
+Der Single-Thread-FFmpeg-Core (Version 0.12.10, ca. 32 MB) wird bei Dateiimporten
+von jsDelivr geladen und per SHA-256 geprüft. Der JS-Wrapper `@ffmpeg/ffmpeg`
+0.12.15 liegt unter `vendor/ffmpeg/`. Die Konvertierung läuft in einem Web Worker.
+Der Spitzenbedarf für Audiodaten hängt von einem Abschnitt und dem Decoder ab,
+nicht von allen erzeugten WAV-Dateien oder einer vollständigen PCM-Aufnahme.
+Die In-App-Aufnahme verwendet weiterhin ihr bisheriges Aufnahmeverfahren.
 
 **Datenschutz:** Die Originaldatei bleibt im Browser. Sie wird weder an jsDelivr
 noch an einen eigenen Server übertragen. Erst die erzeugten Audioabschnitte gehen
@@ -65,3 +70,12 @@ im lokalen `localStorage` und wird nur im Authorization-Header an OpenAI verwend
 python3 -m http.server 8000
 # → http://localhost:8000
 ```
+
+## Validierung langer Importe
+
+`npm test` prüft unter anderem die Fünf-Stunden-Grenze, 30 sequenzielle Abschnitte,
+Dateien über 3 GB, die Freigabe temporärer Daten und fehlende Laufzeitmetadaten.
+Wenn native `ffmpeg` und `ffprobe` verfügbar sind, prüft ein Integrationstest den
+Anfang und das Ende einer echten fünfstündigen 48-kHz-Stereo-WAV-Datei. Sie wird
+als temporäre Sparse-Datei erzeugt und anschließend gelöscht. `npm run check`
+prüft zusätzlich die JavaScript-Syntax.

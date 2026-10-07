@@ -12,7 +12,7 @@ import {
   preparationStatus,
   retryDelayMs,
 } from "./audio-utils.mjs";
-import { prepareLargeUpload } from "./audio-transcoder.mjs";
+import { prepareAudioUpload } from "./audio-transcoder.mjs";
 
 const KEY_STORAGE = "openai_api_key";
 const TRANSCRIBE_MODEL = "whisper-1";
@@ -448,8 +448,8 @@ async function run() {
           `recording-${index + 1}.${extension}`,
         ));
       }
-    } else if (isPreparedUploadRequired(upload)) {
-      preparedUpload = await prepareLargeUpload(upload, showPreparationProgress);
+    } else {
+      preparedUpload = await prepareAudioUpload(upload, showPreparationProgress);
       for (let index = 0; index < preparedUpload.count; index += 1) {
         showStatus(
           `Transkribiere erzeugten Abschnitt ${index + 1} von ${preparedUpload.count}...`,
@@ -457,11 +457,11 @@ async function run() {
           index / preparedUpload.count,
         );
         const part = await preparedUpload.takePart(index);
+        showStatus(`Transkribiere Abschnitt ${index + 1} von ${preparedUpload.count}...`, true, index / preparedUpload.count);
         transcripts.push(await transcribe(part, key, `upload-${index + 1}.wav`));
+        transcriptArea.value = transcripts.join("\n\n");
+        transcriptCard.hidden = false;
       }
-    } else {
-      showStatus("Transkribiere Datei...", true);
-      transcripts.push(await transcribe(upload, key, upload.name));
     }
     const transcript = transcripts.join("\n\n");
     transcriptArea.value = transcript;

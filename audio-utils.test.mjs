@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 
 import {
   MAX_API_ATTEMPTS,
-  MAX_UPLOAD_BYTES,
+  MAX_UPLOAD_DURATION_SECONDS,
+  assertUploadDuration,
+  durationFromLog,
+  buildAudioPartArguments,
   OPENAI_AUDIO_LIMIT_BYTES,
   RECORDING_SEGMENT_MS,
   SUMMARY_TIMEOUT_MS,
@@ -53,7 +56,7 @@ test("recognizes oversized existing uploads without byte slicing", () => {
   assert.equal(uploadHandlingForBytes(SAFE_AUDIO_PART_BYTES), "direct");
   assert.equal(uploadHandlingForBytes(90_000_000), "transcode");
   assert.throws(() => uploadHandlingForBytes(0), /leer oder ungültig/);
-  assert.throws(() => uploadHandlingForBytes(MAX_UPLOAD_BYTES + 1), /bis 250.0 MB/);
+  assert.equal(uploadHandlingForBytes(3_456_000_044), "transcode");
   assert.equal(isPreparedUploadRequired({ size: SAFE_AUDIO_PART_BYTES }), false);
   assert.equal(isPreparedUploadRequired({ size: 90_000_000 }), true);
   assert.equal(extensionForUpload({ name: "Termin.M4A", type: "" }), "m4a");
@@ -102,4 +105,25 @@ test("retries only temporary HTTP failures with bounded backoff and timeouts", (
   assert.equal(retryDelayMs(1, null), 1000);
   assert.equal(retryDelayMs(2, "5"), 5000);
   assert.equal(retryDelayMs(2, "120"), 30_000);
+});
+
+
+test("accepts five-hour imports independently of their file size", () => {
+  assert.equal(MAX_UPLOAD_DURATION_SECONDS, 18000);
+  assert.doesNotThrow(() => assertUploadDuration(18000));
+  assert.throws(() => assertUploadDuration(18001), /länger als 5 Stunden/);
+  assert.throws(() => assertUploadDuration(NaN), /Dauer/);
+  assert.equal(durationFromLog("Duration: 05:00:00.00, start: 0.0"), 18000);
+  assert.equal(durationFromLog("frame=0 time=00:10:01.25 bitrate=N/A"), 601.25);
+  assert.equal(durationFromLog("Duration: N/A, start: 0.0"), null);
+});
+
+test("converts five hours into 30 sequential bounded requests including the end", () => {
+  assert.equal(Math.ceil(18000 / TRANSCODE_SEGMENT_SECONDS), 30);
+  const last = buildAudioPartArguments("/input/file.wav", 29, 18000);
+  assert.deepEqual(last.slice(0, 6), ["-ss", "17400", "-i", "/input/file.wav", "-t", "600"]);
+  assert.equal(last.at(-1), "part.wav");
+  const partial = buildAudioPartArguments("/input/file.wav", 2, 1201.5);
+  assert.equal(partial[5], "1.5");
+  assert.throws(() => buildAudioPartArguments("file", 30, 18000), /Ungültiger/);
 });

@@ -1,7 +1,7 @@
 export const OPENAI_AUDIO_LIMIT_BYTES = 25_000_000;
 // Leave room below OpenAI's decimal 25 MB per-file limit.
 export const SAFE_AUDIO_PART_BYTES = 24_000_000;
-export const MAX_UPLOAD_BYTES = 250_000_000;
+export const MAX_UPLOAD_DURATION_SECONDS = 5 * 60 * 60;
 export const RECORDING_SEGMENT_MS = 10 * 60 * 1000;
 export const TRANSCODE_SEGMENT_SECONDS = 10 * 60;
 export const TRANSCODE_SAMPLE_RATE = 16_000;
@@ -32,13 +32,34 @@ export function uploadHandlingForBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) {
     throw new Error("Die Audio-Datei ist leer oder ungültig.");
   }
-  if (bytes > MAX_UPLOAD_BYTES) {
-    throw new Error(
-      `Die Audio-Datei ist ${formatBytes(bytes)} groß. Unterstützt werden Uploads bis ` +
-      `${formatBytes(MAX_UPLOAD_BYTES)}.`,
-    );
-  }
   return bytes <= SAFE_AUDIO_PART_BYTES ? "direct" : "transcode";
+}
+
+export function assertUploadDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error("Die Dauer der Audiodatei konnte nicht ermittelt werden.");
+  }
+  if (seconds > MAX_UPLOAD_DURATION_SECONDS + 0.1) {
+    throw new Error("Die Audiodatei ist länger als 5 Stunden. Bitte eine Datei mit höchstens 5 Stunden auswählen.");
+  }
+}
+
+export function durationFromLog(message) {
+  const match = message.match(/(?:Duration:\s*|time=)(\d+):(\d{2}):(\d{2}(?:\.\d+)?)/);
+  return match ? Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) : null;
+}
+
+export function buildAudioPartArguments(inputName, index, durationSeconds) {
+  const start = index * TRANSCODE_SEGMENT_SECONDS;
+  const remaining = Math.min(TRANSCODE_SEGMENT_SECONDS, durationSeconds - start);
+  if (!Number.isInteger(index) || index < 0 || remaining <= 0) {
+    throw new Error("Ungültiger Audioabschnitt.");
+  }
+  return [
+    "-ss", String(start), "-i", inputName, "-t", String(remaining),
+    "-vn", "-map", "0:a:0", "-ac", "1", "-ar", String(TRANSCODE_SAMPLE_RATE),
+    "-c:a", "pcm_s16le", "part.wav",
+  ];
 }
 
 
@@ -95,7 +116,7 @@ export function sortAudioPartNames(names) {
 export function preparationStatus(phase, value) {
   const phases = {
     download: ["Lade den Audio-Konverter (einmalig ca. 32 MB)...", 0, 0.1],
-    copy: ["Lese die Audiodatei in den geschützten Browser-Arbeitsspeicher...", 0.1, 0.2],
+    copy: ["Prüfe die Dauer der Audiodatei...", 0.1, 0.2],
     transcode: ["Erzeuge gültige 10-Minuten-Audioabschnitte im Browser...", 0.2, 1],
   };
   const [label, start, end] = phases[phase] || ["Verarbeite Audiodatei im Browser...", 0, 1];
