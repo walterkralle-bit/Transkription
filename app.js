@@ -93,7 +93,7 @@ function editKey() {
 
 function updateRunState() {
   const hasAudio = fileInput.files.length > 0 || recordedBlobs.length > 0;
-  runBtn.disabled = !apiKeyInput.value.trim() || !hasAudio;
+  runBtn.disabled = !hasAudio;
   if (recordedBlobs.length) {
     const totalBytes = recordedBlobs.reduce((sum, part) => sum + part.size, 0);
     sourceHint.hidden = false;
@@ -419,7 +419,13 @@ async function summarize(text, key) {
 async function run() {
   const key = apiKeyInput.value.trim();
   const upload = fileInput.files[0];
-  if (!key || (!recordedBlobs.length && !upload)) return;
+  if (!recordedBlobs.length && !upload) return;
+  if (!key) {
+    setKeyCollapsed(false);
+    showStatus("Bitte zuerst oben den OpenAI API-Key eingeben und speichern.");
+    apiKeyInput.focus();
+    return;
+  }
 
   runBtn.disabled = true;
   transcriptCard.hidden = true;
